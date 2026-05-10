@@ -87,6 +87,7 @@
     #log-list li span{color:var(--accent)}
     #log-list li.ok span{color:var(--green)}
     #log-list li.err span{color:var(--danger)}
+    .storage-note{font-size:.65rem;color:var(--dim);margin-top:6px;opacity:.7}
   </style>
 </head>
 <body>
@@ -95,7 +96,7 @@
     <div class="logo">BIO<span>·</span>CHECK <span style="font-size:.75rem;font-weight:400;color:var(--dim)">STATION</span></div>
     <div class="header-right">
       <div class="server-row">
-        <input class="server-input" id="server-url" placeholder="https://your-app.railway.app" oninput="schedPing()"/>
+        <input class="server-input" id="server-url" placeholder="https://your-app.railway.app" oninput="onUrlInput()"/>
         <div id="api-status">● API</div>
       </div>
       <div id="status-badge" class="offline">● OFFLINE</div>
@@ -165,6 +166,7 @@
         <div class="known-faces-list" id="known-faces-list">
           <span style="font-size:.72rem;color:var(--dim)">No faces on server yet.</span>
         </div>
+        <div class="storage-note">💾 API URL and registered persons are saved in your browser and persist across sessions.</div>
       </div>
     </div>
 
@@ -176,7 +178,11 @@
 </div>
 
 <script>
-// ── Firebase ─────────────────────────────────────────────────────
+// ── Storage Keys ──────────────────────────────────────────────────────
+const STORAGE_KEY_URL   = 'biocheck_url';
+const STORAGE_KEY_FACES = 'biocheck_faces'; // local cache of face names
+
+// ── Firebase ─────────────────────────────────────────────────────────
 firebase.initializeApp({
   apiKey:"AIzaSyDuQfUqqmBQuRaC-i6xuMaevdZNYhOABp4",
   databaseURL:"https://biocheckstation-default-rtdb.firebaseio.com/",
@@ -204,20 +210,37 @@ fireDb.ref('/sensor/temperature').on('value', snap => {
 function toggleLED(){fireDb.ref('/led').transaction(c=>c===true?false:true);log('LED toggled')}
 function resetSystem(){fireDb.ref('/current_user').set('None');fireDb.ref('/sensor/temperature').set(null);document.getElementById('temp').innerHTML='--<span class="unit">°C</span>';stopCamera();log('System reset','err')}
 
-// ── Server URL ────────────────────────────────────────────────────
+// ── Server URL ────────────────────────────────────────────────────────
 function getUrl(){return document.getElementById('server-url').value.replace(/\/$/,'').trim()}
+
 let pingTimer=null;
-function schedPing(){clearTimeout(pingTimer);pingTimer=setTimeout(pingServer,700)}
+function onUrlInput(){
+  const url = getUrl();
+  // Save URL immediately as user types
+  if(url) localStorage.setItem(STORAGE_KEY_URL, url);
+  else localStorage.removeItem(STORAGE_KEY_URL);
+  clearTimeout(pingTimer);
+  pingTimer = setTimeout(pingServer, 700);
+}
+
 async function pingServer(){
   const url=getUrl(); if(!url){setApiStatus(null);return}
   try{
     const r=await fetch(url+'/',{signal:AbortSignal.timeout(5000)});
     const d=await r.json();
-    setApiStatus(true); renderFaces(d.registered_faces||[]);
-    log(`API online · ${d.registered_faces?.length??0} face(s) stored`,'ok');
-    localStorage.setItem('biocheck_url',url);
-  }catch{setApiStatus(false);log('✗ Cannot reach server','err')}
+    setApiStatus(true);
+    // Merge server faces with locally cached faces
+    const serverFaces = d.registered_faces || [];
+    mergeFaces(serverFaces);
+    log(`API online · ${serverFaces.length} face(s) on server`,'ok');
+  }catch{
+    setApiStatus(false);
+    log('✗ Cannot reach server','err');
+    // Still show locally cached faces even when server is offline
+    renderFaces(loadFacesFromStorage());
+  }
 }
+
 function setApiStatus(ok){
   const el=document.getElementById('api-status');
   if(ok===null){el.textContent='● API';el.className='';return}
@@ -225,7 +248,21 @@ function setApiStatus(ok){
   el.className=ok?'ok':'err';
 }
 
-// ── Face registration ─────────────────────────────────────────────
+// ── Local face cache (persists in localStorage) ───────────────────────
+function loadFacesFromStorage(){
+  try{ return JSON.parse(localStorage.getItem(STORAGE_KEY_FACES)||'[]') }
+  catch{ return [] }
+}
+function saveFacesToStorage(faces){
+  localStorage.setItem(STORAGE_KEY_FACES, JSON.stringify(faces));
+}
+// Merge server list into local cache (server is source of truth)
+function mergeFaces(serverFaces){
+  saveFacesToStorage(serverFaces);
+  renderFaces(serverFaces);
+}
+
+// ── Face registration ─────────────────────────────────────────────────
 function onPhotoSelected(i){document.getElementById('file-label').textContent=i.files[0]?.name||'Choose image…'}
 
 async function registerFace(){
@@ -242,25 +279,39 @@ async function registerFace(){
     const d=await r.json();
     if(d.error)throw new Error(d.error);
     log(`✓ "${name}" registered (${d.total} total)`,'ok');
-    renderFaces(await getFaceList());
+    // Update local cache
+    const faces = loadFacesFromStorage();
+    if(!faces.includes(name)){ faces.push(name); saveFacesToStorage(faces); }
+    renderFaces(faces);
     document.getElementById('face-name').value='';
     input.value='';document.getElementById('file-label').textContent='Choose image…';
   }catch(e){log('✗ '+e.message,'err')}
 }
+
 async function getFaceList(){
-  try{const r=await fetch(getUrl()+'/faces');const d=await r.json();return d.faces||[]}catch{return[]}
+  try{const r=await fetch(getUrl()+'/faces');const d=await r.json();return d.faces||[]}
+  catch{return loadFacesFromStorage()} // fallback to local cache
 }
+
 async function deleteFace(name){
-  try{await fetch(getUrl()+'/faces/'+encodeURIComponent(name),{method:'DELETE'});log(`Removed "${name}"`);renderFaces(await getFaceList())}
+  try{
+    await fetch(getUrl()+'/faces/'+encodeURIComponent(name),{method:'DELETE'});
+    log(`Removed "${name}"`);
+    // Remove from local cache too
+    const faces = loadFacesFromStorage().filter(f=>f!==name);
+    saveFacesToStorage(faces);
+    renderFaces(faces);
+  }
   catch(e){log('✗ '+e.message,'err')}
 }
+
 function renderFaces(faces){
   const el=document.getElementById('known-faces-list');
-  if(!faces.length){el.innerHTML='<span style="font-size:.72rem;color:var(--dim)">No faces on server yet.</span>';return}
+  if(!faces||!faces.length){el.innerHTML='<span style="font-size:.72rem;color:var(--dim)">No faces on server yet.</span>';return}
   el.innerHTML=faces.map(f=>`<div class="face-tag">👤 ${f} <button onclick="deleteFace('${f}')">✕</button></div>`).join('');
 }
 
-// ── Aspect ratio ──────────────────────────────────────────────────
+// ── Aspect ratio ──────────────────────────────────────────────────────
 let currentRatio='4/3';
 function setRatio(css,label){
   currentRatio=css;
@@ -273,7 +324,7 @@ function setRatio(css,label){
   log('Ratio → '+label);
 }
 
-// ── Camera ────────────────────────────────────────────────────────
+// ── Camera ────────────────────────────────────────────────────────────
 let stream=null, scanTimer=null, scanning=false, lastSent={};
 const SCAN_MS=2500, THROTTLE_MS=5000;
 
@@ -349,7 +400,7 @@ function clearCv(){const c=document.getElementById('overlay-canvas');c.getContex
 function showOv(name,match){const e=document.getElementById('result-overlay');e.textContent=match?`✓ ${name.toUpperCase()} IDENTIFIED`:'✗ UNKNOWN PERSON';e.className='show '+(match?'match':'no-match')}
 function clearOv(){document.getElementById('result-overlay').className=''}
 
-// ── Utils ─────────────────────────────────────────────────────────
+// ── Utils ─────────────────────────────────────────────────────────────
 function toB64(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=()=>rej(new Error('Read failed'));r.readAsDataURL(file)})}
 function log(msg,type){
   const li=document.createElement('li');if(type)li.className=type;
@@ -357,9 +408,18 @@ function log(msg,type){
   const ul=document.getElementById('log-list');ul.prepend(li);
   if(ul.children.length>50)ul.lastChild.remove();
 }
+
+// ── Init: restore saved URL and faces on page load ────────────────────
 window.addEventListener('load',()=>{
-  const s=localStorage.getItem('biocheck_url');
-  if(s){document.getElementById('server-url').value=s;pingServer()}
+  // Restore API URL
+  const savedUrl = localStorage.getItem(STORAGE_KEY_URL);
+  if(savedUrl){
+    document.getElementById('server-url').value = savedUrl;
+    pingServer(); // ping and sync faces from server
+  }
+  // Show locally cached faces immediately while server pings
+  const cachedFaces = loadFacesFromStorage();
+  if(cachedFaces.length) renderFaces(cachedFaces);
 });
 </script>
 </body>
