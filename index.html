@@ -180,7 +180,7 @@
 <script>
 // ── Storage Keys ──────────────────────────────────────────────────────
 const STORAGE_KEY_URL   = 'biocheck_url';
-const STORAGE_KEY_FACES = 'biocheck_faces'; // local cache of face names
+const STORAGE_KEY_FACES = 'biocheck_faces';
 
 // ── Firebase ─────────────────────────────────────────────────────────
 firebase.initializeApp({
@@ -195,6 +195,7 @@ fireDb.ref('.info/connected').on('value', snap => {
   if(snap.val()){b.textContent='● ONLINE';b.className='online';log('Firebase connected','ok')}
   else{b.textContent='● OFFLINE';b.className='offline'}
 });
+
 fireDb.ref('/current_user').on('value', snap => {
   const raw = snap.val();
   const isEmpty = !raw || raw.toLowerCase() === 'none' || raw.trim() === '';
@@ -203,6 +204,7 @@ fireDb.ref('/current_user').on('value', snap => {
   document.getElementById('user-time').textContent = !isEmpty ? 'Last seen: '+new Date().toLocaleTimeString() : '';
   if(!isEmpty) log('✓ Firebase: identified as '+u, 'ok');
 });
+
 fireDb.ref('/sensor/temperature').on('value', snap => {
   const t = snap.val();
   document.getElementById('temp').innerHTML = t!==null?`${t.toFixed(2)}<span class="unit">°C</span>`:`--<span class="unit">°C</span>`;
@@ -211,7 +213,13 @@ fireDb.ref('/sensor/temperature').on('value', snap => {
 });
 
 function toggleLED(){fireDb.ref('/led').transaction(c=>c===true?false:true);log('LED toggled')}
-function resetSystem(){fireDb.ref('/current_user').set(null);fireDb.ref('/sensor/temperature').set(null);document.getElementById('temp').innerHTML='--<span class="unit">°C</span>';stopCamera();log('System reset','err')}
+function resetSystem(){
+  fireDb.ref('/current_user').set(null);
+  fireDb.ref('/sensor/temperature').set(null);
+  document.getElementById('temp').innerHTML='--<span class="unit">°C</span>';
+  stopCamera();
+  log('System reset','err');
+}
 
 // ── Server URL ────────────────────────────────────────────────────────
 function getUrl(){return document.getElementById('server-url').value.replace(/\/$/,'').trim()}
@@ -219,7 +227,6 @@ function getUrl(){return document.getElementById('server-url').value.replace(/\/
 let pingTimer=null;
 function onUrlInput(){
   const url = getUrl();
-  // Save URL immediately as user types
   if(url) localStorage.setItem(STORAGE_KEY_URL, url);
   else localStorage.removeItem(STORAGE_KEY_URL);
   clearTimeout(pingTimer);
@@ -232,14 +239,12 @@ async function pingServer(){
     const r=await fetch(url+'/',{signal:AbortSignal.timeout(5000)});
     const d=await r.json();
     setApiStatus(true);
-    // Merge server faces with locally cached faces
     const serverFaces = d.registered_faces || [];
     mergeFaces(serverFaces);
     log(`API online · ${serverFaces.length} face(s) on server`,'ok');
   }catch{
     setApiStatus(false);
     log('✗ Cannot reach server','err');
-    // Still show locally cached faces even when server is offline
     renderFaces(loadFacesFromStorage());
   }
 }
@@ -251,19 +256,13 @@ function setApiStatus(ok){
   el.className=ok?'ok':'err';
 }
 
-// ── Local face cache (persists in localStorage) ───────────────────────
+// ── Local face cache ──────────────────────────────────────────────────
 function loadFacesFromStorage(){
   try{ return JSON.parse(localStorage.getItem(STORAGE_KEY_FACES)||'[]') }
   catch{ return [] }
 }
-function saveFacesToStorage(faces){
-  localStorage.setItem(STORAGE_KEY_FACES, JSON.stringify(faces));
-}
-// Merge server list into local cache (server is source of truth)
-function mergeFaces(serverFaces){
-  saveFacesToStorage(serverFaces);
-  renderFaces(serverFaces);
-}
+function saveFacesToStorage(faces){ localStorage.setItem(STORAGE_KEY_FACES, JSON.stringify(faces)) }
+function mergeFaces(serverFaces){ saveFacesToStorage(serverFaces); renderFaces(serverFaces) }
 
 // ── Face registration ─────────────────────────────────────────────────
 function onPhotoSelected(i){document.getElementById('file-label').textContent=i.files[0]?.name||'Choose image…'}
@@ -282,7 +281,6 @@ async function registerFace(){
     const d=await r.json();
     if(d.error)throw new Error(d.error);
     log(`✓ "${name}" registered (${d.total} total)`,'ok');
-    // Update local cache
     const faces = loadFacesFromStorage();
     if(!faces.includes(name)){ faces.push(name); saveFacesToStorage(faces); }
     renderFaces(faces);
@@ -293,14 +291,13 @@ async function registerFace(){
 
 async function getFaceList(){
   try{const r=await fetch(getUrl()+'/faces');const d=await r.json();return d.faces||[]}
-  catch{return loadFacesFromStorage()} // fallback to local cache
+  catch{return loadFacesFromStorage()}
 }
 
 async function deleteFace(name){
   try{
     await fetch(getUrl()+'/faces/'+encodeURIComponent(name),{method:'DELETE'});
     log(`Removed "${name}"`);
-    // Remove from local cache too
     const faces = loadFacesFromStorage().filter(f=>f!==name);
     saveFacesToStorage(faces);
     renderFaces(faces);
@@ -345,6 +342,7 @@ async function toggleCamera(){
     scanTimer=setInterval(sendSnap,SCAN_MS);
   }catch(e){log('✗ Camera: '+e.message,'err')}
 }
+
 function stopCamera(){
   clearInterval(scanTimer);scanTimer=null;
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
@@ -356,6 +354,7 @@ function stopCamera(){
   clearOv();clearCv();log('Camera stopped');
 }
 
+// ── UPDATED: browser writes identity directly to Firebase ─────────────
 async function sendSnap(){
   const url=getUrl(); if(!url||scanning)return;
   const v=document.getElementById('video'); if(!v.videoWidth)return;
@@ -366,19 +365,33 @@ async function sendSnap(){
     sc.width=320;sc.height=240;
     sc.getContext('2d').drawImage(v,0,0,320,240);
     const b64=sc.toDataURL('image/jpeg',0.6).split(',')[1];
-    const r=await fetch(url+'/recognise',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64}),signal:AbortSignal.timeout(5000)});
+    const r=await fetch(url+'/recognise',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({image:b64}),
+      signal:AbortSignal.timeout(5000)
+    });
     const d=await r.json();
     if(d.error){log('✗ Server: '+d.error,'err');return}
     const name=d.name;
-    if(name&&name!=='Unknown'){
-      showOv(name,true);drawBox(v,true,name);
+    if(name && name!=='Unknown'){
+      showOv(name,true);
+      drawBox(v,true,name);
       const now=Date.now();
-      if(!lastSent[name]||now-lastSent[name]>THROTTLE_MS){
+      if(!lastSent[name] || now-lastSent[name]>THROTTLE_MS){
         lastSent[name]=now;
-        log(`✓ Recognised: ${name} · ${Math.round(d.confidence*100)}% confidence`,'ok');
+        // ── Write identity to Firebase directly from the browser ──
+        fireDb.ref('/current_user').set(name)
+          .then(()=>log(`✓ Recognised: ${name} · ${Math.round(d.confidence*100)}% confidence`,'ok'))
+          .catch(e=>log('✗ Firebase write failed: '+e.message,'err'));
       }
-    }else if(d.faces_found>0){showOv('Unknown',false);drawBox(v,false,'Unknown')}
-    else{clearOv();clearCv()}
+    }else if(d.faces_found>0){
+      showOv('Unknown',false);
+      drawBox(v,false,'Unknown');
+    }else{
+      clearOv();
+      clearCv();
+    }
   }catch(e){if(!e.message.includes('abort'))log('✗ Scan: '+e.message,'err')}
   finally{scanning=false;document.getElementById('scan-indicator').classList.remove('active')}
 }
@@ -412,15 +425,13 @@ function log(msg,type){
   if(ul.children.length>50)ul.lastChild.remove();
 }
 
-// ── Init: restore saved URL and faces on page load ────────────────────
+// ── Init ──────────────────────────────────────────────────────────────
 window.addEventListener('load',()=>{
-  // Restore API URL
   const savedUrl = localStorage.getItem(STORAGE_KEY_URL);
   if(savedUrl){
     document.getElementById('server-url').value = savedUrl;
-    pingServer(); // ping and sync faces from server
+    pingServer();
   }
-  // Show locally cached faces immediately while server pings
   const cachedFaces = loadFacesFromStorage();
   if(cachedFaces.length) renderFaces(cachedFaces);
 });
