@@ -196,9 +196,12 @@ fireDb.ref('.info/connected').on('value', snap => {
   else{b.textContent='● OFFLINE';b.className='offline'}
 });
 fireDb.ref('/current_user').on('value', snap => {
-  const u = snap.val()||'NONE';
+  const raw = snap.val();
+  const isEmpty = !raw || raw.toLowerCase() === 'none' || raw.trim() === '';
+  const u = isEmpty ? 'NONE' : raw;
   document.getElementById('user').textContent = u;
-  document.getElementById('user-time').textContent = u!=='NONE'?'Last seen: '+new Date().toLocaleTimeString():'';
+  document.getElementById('user-time').textContent = !isEmpty ? 'Last seen: '+new Date().toLocaleTimeString() : '';
+  if(!isEmpty) log('✓ Firebase: identified as '+u, 'ok');
 });
 fireDb.ref('/sensor/temperature').on('value', snap => {
   const t = snap.val();
@@ -208,7 +211,7 @@ fireDb.ref('/sensor/temperature').on('value', snap => {
 });
 
 function toggleLED(){fireDb.ref('/led').transaction(c=>c===true?false:true);log('LED toggled')}
-function resetSystem(){fireDb.ref('/current_user').set('None');fireDb.ref('/sensor/temperature').set(null);document.getElementById('temp').innerHTML='--<span class="unit">°C</span>';stopCamera();log('System reset','err')}
+function resetSystem(){fireDb.ref('/current_user').set(null);fireDb.ref('/sensor/temperature').set(null);document.getElementById('temp').innerHTML='--<span class="unit">°C</span>';stopCamera();log('System reset','err')}
 
 // ── Server URL ────────────────────────────────────────────────────────
 function getUrl(){return document.getElementById('server-url').value.replace(/\/$/,'').trim()}
