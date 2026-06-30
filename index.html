@@ -36,6 +36,15 @@
     .big-value.green{color:var(--green);text-shadow:var(--glow2)}
     .unit{font-size:.9rem;color:var(--dim);margin-left:4px}
 
+    /* ── Emergency banner ── */
+    .emergency-banner{grid-column:1/-1;display:none;align-items:center;gap:14px;background:rgba(255,56,96,.12);border:1px solid var(--danger);border-radius:12px;padding:16px 22px;box-shadow:0 0 24px rgba(255,56,96,.25);animation:ebpulse 1.4s ease-in-out infinite}
+    .emergency-banner.show{display:flex}
+    @keyframes ebpulse{0%,100%{box-shadow:0 0 14px rgba(255,56,96,.2)}50%{box-shadow:0 0 30px rgba(255,56,96,.45)}}
+    .emergency-icon{font-size:1.6rem;color:var(--danger);flex-shrink:0;animation:blink .8s step-end infinite}
+    .emergency-text{flex:1}
+    .emergency-title{font-family:'Orbitron',sans-serif;font-size:.9rem;font-weight:900;letter-spacing:.1em;color:var(--danger)}
+    .emergency-reason{font-size:.78rem;color:var(--text);margin-top:3px;text-transform:uppercase;letter-spacing:.05em}
+
     /* ── Vitals row ── */
     .vitals-row{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
     .vcard{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;position:relative;overflow:hidden}
@@ -145,6 +154,15 @@
   </header>
 
   <div class="grid">
+
+    <!-- ── Emergency Banner ── -->
+    <div class="emergency-banner" id="emergency-banner">
+      <div class="emergency-icon">⚠</div>
+      <div class="emergency-text">
+        <div class="emergency-title">EMERGENCY ALERT</div>
+        <div class="emergency-reason" id="emergency-reason-text">—</div>
+      </div>
+    </div>
 
     <!-- ── Identified User ── -->
     <div class="card">
@@ -309,7 +327,7 @@ fireDb.ref('/sensor/temperature').on('value', snap => {
 });
 
 // ── SpO2 ──────────────────────────────────────────────────────────────
-fireDb.ref('/sensor/spo2').on('value', snap => {
+fireDb.ref('/health/spo2').on('value', snap => {
   const v = snap.val();
   const el = document.getElementById('v-spo2');
   if(v !== null){
@@ -326,7 +344,7 @@ fireDb.ref('/sensor/spo2').on('value', snap => {
 });
 
 // ── Heart Rate ────────────────────────────────────────────────────────
-fireDb.ref('/sensor/heart_rate').on('value', snap => {
+fireDb.ref('/health/heart_rate').on('value', snap => {
   const v = snap.val();
   const el = document.getElementById('v-hr');
   if(v !== null){
@@ -344,11 +362,11 @@ fireDb.ref('/sensor/heart_rate').on('value', snap => {
   }
 });
 
-// ── Blood Pressure ────────────────────────────────────────────────────
-fireDb.ref('/sensor/blood_pressure').on('value', snap => {
-  const v = snap.val();
-  if(v !== null && v.systolic !== undefined){
-    const s = Math.round(v.systolic), d = Math.round(v.diastolic);
+// ── Blood Pressure (separate systolic_bp / diastolic_bp keys) ─────────
+let lastSys=null, lastDia=null;
+function renderBP(){
+  if(lastSys!==null && lastDia!==null){
+    const s=Math.round(lastSys), d=Math.round(lastDia);
     document.getElementById('v-sys').textContent = s;
     document.getElementById('v-dia').textContent = d;
     const isCrit = s>180||d>120||s<80, isWarn = s>140||d>90||s<90;
@@ -360,6 +378,31 @@ fireDb.ref('/sensor/blood_pressure').on('value', snap => {
     document.getElementById('v-dia').textContent = '--';
     document.getElementById('v-bp-sub').textContent = 'Waiting for sensor…';
   }
+}
+fireDb.ref('/health/systolic_bp').on('value', snap => { lastSys = snap.val(); renderBP(); });
+fireDb.ref('/health/diastolic_bp').on('value', snap => { lastDia = snap.val(); renderBP(); });
+
+// ── Emergency ─────────────────────────────────────────────────────────
+let emergencyActive=false, emergencyReason='';
+function renderEmergency(){
+  const banner=document.getElementById('emergency-banner');
+  if(emergencyActive){
+    banner.classList.add('show');
+    document.getElementById('emergency-reason-text').textContent = (emergencyReason||'UNKNOWN CAUSE').trim();
+  } else {
+    banner.classList.remove('show');
+  }
+}
+fireDb.ref('/health/emergency').on('value', snap => {
+  const wasActive = emergencyActive;
+  emergencyActive = !!snap.val();
+  renderEmergency();
+  if(emergencyActive && !wasActive) log('🚨 EMERGENCY TRIGGERED','err');
+  if(!emergencyActive && wasActive) log('Emergency cleared','ok');
+});
+fireDb.ref('/health/emergency_reason').on('value', snap => {
+  emergencyReason = snap.val() || '';
+  renderEmergency();
 });
 
 // ── ECG annotations ───────────────────────────────────────────────────
@@ -384,9 +427,12 @@ function toggleLED(){fireDb.ref('/led').transaction(c=>c===true?false:true);log(
 function resetSystem(){
   fireDb.ref('/current_user').set(null);
   fireDb.ref('/sensor/temperature').set(null);
-  fireDb.ref('/sensor/spo2').set(null);
-  fireDb.ref('/sensor/heart_rate').set(null);
-  fireDb.ref('/sensor/blood_pressure').set(null);
+  fireDb.ref('/health/spo2').set(null);
+  fireDb.ref('/health/heart_rate').set(null);
+  fireDb.ref('/health/systolic_bp').set(null);
+  fireDb.ref('/health/diastolic_bp').set(null);
+  fireDb.ref('/health/emergency').set(false);
+  fireDb.ref('/health/emergency_reason').set(null);
   fireDb.ref('/sensor/ecg_status').set(null);
   stopCamera();
   log('System reset','err');
