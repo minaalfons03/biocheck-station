@@ -49,7 +49,6 @@
     .vitals-row{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
     .vcard{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;position:relative;overflow:hidden}
     .vcard::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;opacity:.6}
-    .vcard.v-temp::before{background:linear-gradient(90deg,transparent,var(--warn),transparent)}
     .vcard.v-spo2::before{background:linear-gradient(90deg,transparent,var(--accent),transparent)}
     .vcard.v-hr::before{background:linear-gradient(90deg,transparent,var(--danger),transparent)}
     .vcard.v-bp::before{background:linear-gradient(90deg,transparent,#b388ff,transparent)}
@@ -185,12 +184,6 @@
     <!-- ── 4 Vitals ── -->
     <div class="vitals-row">
 
-      <div class="vcard v-temp">
-        <div class="vcard-label"><span class="dot dot-amber"></span> Temperature</div>
-        <div class="vcard-value c-warn" id="v-temp">--<span class="vcard-unit">°C</span></div>
-        <div class="vcard-sub" id="v-temp-sub">Waiting for sensor…</div>
-      </div>
-
       <div class="vcard v-spo2">
         <div class="vcard-label"><span class="dot dot-blue"></span> SpO2</div>
         <div class="vcard-value c-accent" id="v-spo2">--<span class="vcard-unit">%</span></div>
@@ -311,21 +304,6 @@ fireDb.ref('/current_user').on('value', snap => {
   if(!isEmpty) log('✓ Firebase: identified as '+u, 'ok');
 });
 
-// ── Temperature ───────────────────────────────────────────────────────
-fireDb.ref('/sensor/temperature').on('value', snap => {
-  const t = snap.val();
-  const el = document.getElementById('v-temp');
-  if(t !== null){
-    el.innerHTML = parseFloat(t).toFixed(1)+'<span class="vcard-unit">°C</span>';
-    const isFever = t > 39, isHigh = t > 37.5;
-    el.className = 'vcard-value '+(isFever?'c-danger':isHigh?'c-warn':'c-green');
-    setVSub('v-temp-sub', isFever?'High fever':isHigh?'Elevated':'Normal', isFever?'err':isHigh?'warn':'ok');
-  } else {
-    el.innerHTML = '--<span class="vcard-unit">°C</span>';
-    document.getElementById('v-temp-sub').textContent = 'Waiting for sensor…';
-  }
-});
-
 // ── SpO2 ──────────────────────────────────────────────────────────────
 fireDb.ref('/health/spo2').on('value', snap => {
   const v = snap.val();
@@ -426,7 +404,6 @@ function setVSub(id, text, cls){
 function toggleLED(){fireDb.ref('/led').transaction(c=>c===true?false:true);log('LED toggled')}
 function resetSystem(){
   fireDb.ref('/current_user').set(null);
-  fireDb.ref('/sensor/temperature').set(null);
   fireDb.ref('/health/spo2').set(null);
   fireDb.ref('/health/heart_rate').set(null);
   fireDb.ref('/health/systolic_bp').set(null);
